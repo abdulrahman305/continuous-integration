@@ -111,9 +111,7 @@ DOWNSTREAM_PROJECTS_PRODUCTION = {
     },
     "Bazel": {
         "git_repository": "https://github.com/bazelbuild/bazel.git",
-        # https://github.com/bazelbuild/bazel/issues/21864
-        # "file_config": ".bazelci/postsubmit.yml",
-        "http_config": "https://raw.githubusercontent.com/bazelbuild/continuous-integration/master/pipelines/bazel-postsubmit.yml",
+        "file_config": ".bazelci/postsubmit.yml",
         "pipeline_slug": "bazel-bazel",
     },
     "Bazel Bench": {
@@ -301,6 +299,7 @@ DOWNSTREAM_PROJECTS_PRODUCTION = {
     "rules_graalvm": {
         "git_repository": "https://github.com/sgammon/rules_graalvm.git",
         "pipeline_slug": "rules-graalvm",
+        "disabled_reason": "https://github.com/sgammon/rules_graalvm/issues/409",
     },
     "rules_haskell": {
         "git_repository": "https://github.com/tweag/rules_haskell.git",
@@ -309,6 +308,7 @@ DOWNSTREAM_PROJECTS_PRODUCTION = {
     "rules_jsonnet": {
         "git_repository": "https://github.com/bazelbuild/rules_jsonnet.git",
         "pipeline_slug": "rules-jsonnet",
+        "disabled_reason": "https://github.com/bazelbuild/rules_jsonnet/issues/194",
     },
     "rules_jvm_external": {
         "git_repository": "https://github.com/bazelbuild/rules_jvm_external.git",
@@ -464,7 +464,7 @@ PLATFORMS = {
     "ubuntu2004_arm64": {
         "name": "Ubuntu 20.04 LTS ARM64",
         "emoji-name": ":ubuntu: Ubuntu 20.04 LTS ARM64",
-        "publish_binary": [],
+        "publish_binary": ["linux_arm64"],
         "docker-image": f"gcr.io/{DOCKER_REGISTRY_PREFIX}/ubuntu2004",
         "python": "python3.8",
         "queue": "arm64",
@@ -520,39 +520,11 @@ PLATFORMS = {
         "queue": "macos",
         "python": "python3",
     },
-    "macos_v2": {
-        "name": "macOS",
-        "emoji-name": ":darwin: macOS",
-        "publish_binary": [],
-        "queue": "macos_v2",
-        "python": "python3",
-    },
-    "macos_qa": {
-        "name": "macOS QA",
-        "emoji-name": ":darwin: :fire_extinguisher:",
-        "publish_binary": [],
-        "queue": "macos_qa",
-        "python": "python3",
-    },
-    "macos_arm64_qa": {
-        "name": "macOS arm64 QA",
-        "emoji-name": ":darwin: arm64 :fire_extinguisher:",
-        "publish_binary": [],
-        "queue": "macos_arm64_qa",
-        "python": "python3",
-    },
     "macos_arm64": {
         "name": "macOS arm64",
         "emoji-name": ":darwin: macOS arm64",
         "publish_binary": ["macos_arm64"],
         "queue": "macos_arm64",
-        "python": "python3",
-    },
-    "macos_arm64_v2": {
-        "name": "macOS arm64",
-        "emoji-name": ":darwin: macOS arm64",
-        "publish_binary": [],
-        "queue": "macos_arm64_v2",
         "python": "python3",
     },
     "windows": {
@@ -579,6 +551,7 @@ for platform, platform_dict in PLATFORMS.copy().items():
         rbe_platform_dict = copy.deepcopy(platform_dict)
         rbe_platform_dict["name"] = "RBE {}".format(platform_dict["name"])
         rbe_platform_dict["emoji-name"] = "RBE {}".format(platform_dict["emoji-name"])
+        rbe_platform_dict["publish_binary"] = []
         PLATFORMS["rbe_{}".format(platform)] = rbe_platform_dict
 
 BUILDIFIER_DOCKER_IMAGE = "gcr.io/bazel-public/buildifier"
@@ -597,6 +570,7 @@ XCODE_VERSION_OVERRIDES = {"10.2.1": "10.3", "11.2": "11.2.1", "11.3": "11.3.1"}
 BUILD_LABEL_PATTERN = re.compile(r"^Build label: (\S+)$", re.MULTILINE)
 
 BUILDIFIER_STEP_NAME = "Buildifier"
+SHARD_SUMMARY_STEP_NAME = "Print Test Summary for Shards"
 
 SKIP_TASKS_ENV_VAR = "CI_SKIP_TASKS"
 
@@ -635,13 +609,14 @@ ESCAPED_BACKSLASH = "%5C"
 MAX_TASK_NUMBER = 80
 
 LAB_AGENT_PATTERNS = [
-    re.compile(r"^bk-imacpro-\d+$"),
+    re.compile(r"^bk-(trusted-)?imacpro-\d+$"),
     re.compile(r"^bk-(trusted|testing)-macpro-\d+$"),
     re.compile(r"^bk-(trusted-)?macstudio-\d+$"),
 ]
 
 _TEST_BEP_FILE = "test_bep.json"
 _SHARD_RE = re.compile(r"(.+) \(shard (\d+)\)")
+_SLOWEST_N_TARGETS = 20
 
 
 class BuildkiteException(Exception):
@@ -894,8 +869,8 @@ P9w8kNhEbw==
 
 
 def decrypt_token(encrypted_token, kms_key, project="bazel-untrusted"):
-    return (
-        subprocess.check_output(
+    try:
+        result = subprocess.run(
             [
                 gcloud_command(),
                 "kms",
@@ -915,10 +890,14 @@ def decrypt_token(encrypted_token, kms_key, project="bazel-untrusted"):
             ],
             input=base64.b64decode(encrypted_token),
             env=os.environ,
+            check=True,
+            stdout=subprocess.PIPE,  # We cannot use capture_output since some workers run Python <3.7
+            stderr=subprocess.PIPE,  # We cannot use capture_output since some workers run Python <3.7
         )
-        .decode("utf-8")
-        .strip()
-    )
+        return result.stdout.decode("utf-8").strip()
+    except subprocess.CalledProcessError as ex:
+        cause = ex.stderr.decode("utf-8")
+        raise BuildkiteException(f"Failed to decrypt token:\n{cause}")
 
 
 def eprint(*args, **kwargs):
@@ -1257,11 +1236,6 @@ def execute_commands(
         os.environ["BAZELISK_USER_AGENT"] = "Bazelisk/BazelCI"
         test_env_vars.append("BAZELISK_USER_AGENT")
 
-        # Avoid "Network is unreachable" errors in IPv6-only environments
-        for e in ("COURSIER_OPTS", "JAVA_TOOL_OPTIONS", "SSL_CERT_FILE"):
-            if os.getenv(e):
-                test_env_vars.append(e)
-
         # We use one binary for all Linux platforms (because we also just release one binary for all
         # Linux versions and we have to ensure that it works on all of them).
         binary_platform = platform if is_mac() or is_windows() else LINUX_BINARY_PLATFORM
@@ -1295,6 +1269,12 @@ def execute_commands(
             # We have to explicitly convert the value to a string, because sometimes YAML tries to
             # be smart and converts strings like "true" and "false" to booleans.
             os.environ[key] = os.path.expandvars(str(value))
+
+        # Avoid "Network is unreachable" errors in IPv6-only environments
+        for e in ("COURSIER_OPTS", "JAVA_TOOL_OPTIONS", "SSL_CERT_FILE"):
+            # If users overrode a variable with an empty value above, it won't be added here.
+            if os.getenv(e):
+                test_env_vars.append(e)
 
         # Set BAZELISK_SHUTDOWN to 1 when we use bazelisk --migrate on Windows.
         # This is a workaround for https://github.com/bazelbuild/continuous-integration/issues/1012
@@ -1416,13 +1396,23 @@ def execute_commands(
                 else:
                     kms_key = "buildkite-untrusted-api-token"
                     project = "bazel-untrusted"
-                os.environ["BUILDKITE_ANALYTICS_TOKEN"] = decrypt_token(
-                    encrypted_token=os.environ["ENCRYPTED_BUILDKITE_ANALYTICS_TOKEN"],
-                    kms_key=kms_key,
-                    project=project,
-                )
+
+                try:
+                    os.environ["BUILDKITE_ANALYTICS_TOKEN"] = decrypt_token(
+                        encrypted_token=os.environ["ENCRYPTED_BUILDKITE_ANALYTICS_TOKEN"],
+                        kms_key=kms_key,
+                        project=project,
+                    )
+                except Exception as ex:
+                    print_collapsed_group(
+                        ":rotating_light: Test analytics disabled due to an error :warning:"
+                    )
+                    eprint(ex)
 
             test_bep_file = os.path.join(tmpdir, _TEST_BEP_FILE)
+            # Create an empty test_bep_file so that the bazelci-agent can start to follow the file right away. Otherwise,
+            # there is a race between when bazelci-agent starts to read the file and when Bazel creates the file.
+            open(test_bep_file, "w").close()
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 future = executor.submit(
                     upload_test_logs_from_bep, test_bep_file, tmpdir, monitor_flaky_tests
@@ -2331,7 +2321,7 @@ def expand_test_target_patterns(bazel_binary, test_targets, test_flags):
 
 
 def get_test_query(test_targets, test_flags):
-    included_targets, excluded_targets = partition_list(test_targets)
+    included_targets, excluded_targets, added_back = partition_list(test_targets)
 
     def FormatTargetList(targets):
         return " ".join("'{}'".format(t) for t in targets)
@@ -2340,6 +2330,9 @@ def get_test_query(test_targets, test_flags):
 
     if excluded_targets:
         query += " except tests(set({}))".format(FormatTargetList(excluded_targets))
+
+    if added_back:
+        query += " union tests(set({}))".format(FormatTargetList(added_back))
 
     included_tags, excluded_tags = get_test_tags(test_flags)
 
@@ -2361,7 +2354,7 @@ def get_test_tags(test_flags):
             continue
 
         tags = removeprefix(f, wanted_prefix).split(",")
-        include, exclude = partition_list(tags)
+        include, exclude, _ = partition_list(tags)
 
         # Skip tests tagged as "manual" by default, unless explicitly requested
         manual_tag = "manual"
@@ -2580,14 +2573,16 @@ def run_bazel_diff(bazel_diff_path, old_workspace_dir, new_workspace_dir, bazel_
 
 
 def partition_list(items):
-    included, excluded = [], []
+    included, excluded, added_back = [], [], []
     for i in items:
         if i.startswith("-"):
             excluded.append(i[1:])
+        elif i.startswith("+"):
+            added_back.append(i[1:])
         else:
             included.append(i)
 
-    return included, excluded
+    return included, excluded, added_back
 
 
 def get_targets_for_shard(test_targets, shard_id, shard_count):
@@ -2677,7 +2672,6 @@ def upload_test_logs_from_bep(bep_file, tmpdir, monitor_flaky_tests):
             "artifact",
             "upload",
             "--debug",  # Force BEP upload for non-flaky failures
-            "--delay=5",
             "--mode=buildkite",
             "--build_event_json_file={}".format(bep_file),
         ]
@@ -2799,6 +2793,16 @@ def create_step(label, commands, platform, shards=1, soft_fail=None):
         ]
     }
 
+    # Retry on macos_arm64 due to
+    # https://github.com/bazelbuild/continuous-integration/issues/2025
+    if platform == "macos_arm64":
+        step["retry"]["automatic"].append({"exit_status": 255, "limit": 1})
+
+    # Automatically retry on Intel Macs to work around flaky failures.
+    if platform == "macos":
+        step["retry"]["automatic"].append({"exit_status": 128, "limit": 1})
+        step["retry"]["automatic"].append({"exit_status": 1, "limit": 1})
+
     return step
 
 
@@ -2806,6 +2810,9 @@ def create_docker_step(
     label, image, commands=None, additional_env_vars=None, queue="default", always_pull=True
 ):
     env = ["ANDROID_HOME", "ANDROID_NDK_HOME", "BUILDKITE_ARTIFACT_UPLOAD_DESTINATION"]
+    if THIS_IS_TRUSTED:
+        # For the trusted Linux arm64 machine to upload artifacts
+        env += ["GOOGLE_APPLICATION_CREDENTIALS"]
     if additional_env_vars:
         env += ["{}={}".format(k, v) for k, v in additional_env_vars.items()]
 
@@ -3035,7 +3042,7 @@ def print_project_pipeline(
     if actually_print_shard_summary:
         pipeline_steps.append(
             create_step(
-                label="Print Test Summary for Shards",
+                label=SHARD_SUMMARY_STEP_NAME,
                 commands=[
                     fetch_bazelcipy_command(),
                     PLATFORMS[DEFAULT_PLATFORM]["python"] + " bazelci.py print_shard_summary",
@@ -3051,10 +3058,13 @@ def show_gerrit_review_link(git_repository, pipeline_steps):
     host = re.search(r"https://(.+?)\.googlesource", git_repository).group(1)
     if not host:
         raise BuildkiteException("Couldn't get host name from %s" % git_repository)
-    text = "The transformed code used in this pipeline can be found under https://{}-review.googlesource.com/q/{}".format(
-        host, os.getenv("BUILDKITE_COMMIT")
-    )
-    commands = ["buildkite-agent annotate --style=info --context 'gerrit' '{}'".format(text)]
+    commit = os.getenv("BUILDKITE_COMMIT")
+    line1 = f"The transformed code used in this pipeline can be found under https://{host}-review.googlesource.com/q/{commit}"
+    line2 = f"\n\nFetch the source with `git fetch https://{host}.googlesource.com/bazel {commit}  && git checkout FETCH_HEAD`"
+    commands = [
+        "buildkite-agent annotate --style=info '{}' --context 'gerrit'".format(line1),
+        "buildkite-agent annotate --style=info '{}' --append --context 'gerrit'".format(line2),
+    ]
     pipeline_steps.append(
         create_step(
             label=":pipeline: Print information about Gerrit Review Link",
@@ -3696,11 +3706,11 @@ def try_update_last_green_commit():
         state = job.get("state")
         # Ignore steps that don't have a state (like "wait").
         return (
-            state is not None
+            state
             and state != "passed"
             and not job.get("soft_failed")
             and job["id"] != current_job_id
-            and job["name"] != BUILDIFIER_STEP_NAME
+            and job["name"] not in (BUILDIFIER_STEP_NAME, SHARD_SUMMARY_STEP_NAME)
         )
 
     failing_jobs = [j["name"] for j in build_info["jobs"] if has_failed(j)]
@@ -3810,8 +3820,9 @@ def print_shard_summary():
     tmpdir = tempfile.mkdtemp()
     try:
         print_collapsed_group("Fetching test artifacts...")
-        all_test_artifacts = get_artifacts_for_failing_tests()
+        all_test_artifacts = get_test_artifacts()
         print_collapsed_group("Downloading & parsing BEP files...")
+        perf_stats = []
         for base_task, current_test_artifacts in all_test_artifacts.items():
             failures = []
             for test_artifact in current_test_artifacts:
@@ -3824,7 +3835,12 @@ def print_shard_summary():
                     continue
 
                 for test_execution in parse_bep(local_bep_path):
+                    for shard in test_execution.shards:
+                        perf_stats.append(shard.get_metrics(test_execution.label, test_artifact))
+
                     if test_execution.overall_status == "PASSED":
+                        continue
+                    if len(test_execution.shards) == 1:
                         continue
 
                     failures.append(
@@ -3843,6 +3859,22 @@ def print_shard_summary():
                         f"{base_task}",
                     ]
                 )
+
+        if perf_stats:
+            slowest = sorted(perf_stats, key=lambda x: -x[0])
+            message = "\n".join(
+                f"{rank}. {tpl[1]}" for rank, tpl in enumerate(slowest[:_SLOWEST_N_TARGETS], 1)
+            )
+            execute_command(
+                [
+                    "buildkite-agent",
+                    "annotate",
+                    "--style=warning",
+                    f"**Slowest {_SLOWEST_N_TARGETS} targets**\n\n{message}",
+                    "--context",
+                    "slowest_targets",
+                ]
+            )
     except Exception as ex:
         eprint(f"Failed to print shard summary: {ex}")
     finally:
@@ -3862,7 +3894,7 @@ def get_log_path_for_label(label, shard, total_shards, attempt, total_attempts, 
     return path.replace("/", ESCAPED_BACKSLASH) if is_windows else path
 
 
-def get_artifacts_for_failing_tests():
+def get_test_artifacts():
     org_slug = os.getenv("BUILDKITE_ORGANIZATION_SLUG")
     pipeline_slug = os.getenv("BUILDKITE_PIPELINE_SLUG")
     build_number = os.getenv("BUILDKITE_BUILD_NUMBER")
@@ -3872,22 +3904,23 @@ def get_artifacts_for_failing_tests():
 
     paths = collections.defaultdict(list)
     for job in build_info["jobs"]:
-        if job.get("state") in (None, "passed"):
+        state = job.get("state")
+        if not state:  # Wait steps etc.
             continue
 
+        job_name = job.get("name", "")
         # This is a bit hacky, but saves us one API request per job (to check for BUILDKITE_PARALLEL_JOB)
-        match = _SHARD_RE.search(job.get("name", ""))
-        if not match:
-            continue
+        match = _SHARD_RE.search(job_name)
+        base_task = match.group(1) if match else job_name
 
         relative_bep_path, relative_log_paths = get_test_file_paths(job["id"])
-        # TODO: show build failures in the annotation, too?
         if not relative_bep_path:
             continue
 
-        base_task = match.group(1)
         ta = TestArtifacts(
             job_id=job["id"],
+            job_name=job_name,
+            job_url=job.get("web_url"),
             relative_bep_path=relative_bep_path,
             relative_log_paths=relative_log_paths,
         )
@@ -3897,9 +3930,10 @@ def get_artifacts_for_failing_tests():
 
 
 class TestArtifacts:
-
-    def __init__(self, job_id, relative_bep_path, relative_log_paths) -> None:
+    def __init__(self, job_id, job_name, job_url, relative_bep_path, relative_log_paths) -> None:
         self.job_id = job_id
+        self.job_name = job_name
+        self.job_url = job_url
         self.relative_bep_path = relative_bep_path
         self.relative_log_paths = relative_log_paths
 
@@ -3988,8 +4022,9 @@ class TestAttempt:
 
 
 class TestShard:
-    def __init__(self, number, attempts) -> None:
+    def __init__(self, number, total_shards, attempts) -> None:
         self.number = number
+        self.total_shards = total_shards
         self.attempts = attempts
 
     def _get_detailed_overall_status(self):
@@ -4009,9 +4044,19 @@ class TestShard:
     def get_details(self):
         overall, bad_runs, total_runs = self._get_detailed_overall_status()
         qualifier = "" if not bad_runs else f"{bad_runs} out of "
-        time = f" over {format_millis(self.attempt_millis)}" if self.attempt_millis else ""
+        runs = f" in {qualifier}{total_runs} runs" if total_runs > 1 else ""
+        time = f" in {format_millis(self.attempt_millis)}" if self.attempt_millis else ""
         cause = f" because of {self.root_cause}" if self.root_cause else ""
-        return overall, (f"in {qualifier}{total_runs} run(s){time}{cause}")
+        return overall, f"{runs}{time}{cause}"
+
+    def get_metrics(self, label, test_artifact):
+        total_time = sum(self.attempt_millis)
+        shard_info = "" if self.total_shards == 1 else f" (shard {self.number}/{self.total_shards})"
+        overall, stats = self.get_details()
+        return (
+            total_time,
+            f"{label}{shard_info} on {test_artifact.job_name}: {format_test_status(overall)} {stats} ([log]({test_artifact.job_url}))",
+        )
 
     @property
     def overall_status(self):
@@ -4108,7 +4153,9 @@ def parse_bep(path):
     tests = []
     for test, attempts_per_shard in data.items():
         shards = [
-            TestShard(number=shard, attempts=attempts_per_shard[shard])
+            TestShard(
+                number=shard, total_shards=len(data[test]), attempts=attempts_per_shard[shard]
+            )
             for shard in sorted(attempts_per_shard.keys())
         ]
         tests.append(TestExecution(label=test, shards=shards))
@@ -4126,8 +4173,6 @@ def get_test_results_from_bep(path):
 
             if test_result:
                 if "testResult" not in data:
-                    # No testResult field means "aborted" -> NO_STATUS
-                    # TODO: show these targets in the UI?
                     continue
 
                 yield (
