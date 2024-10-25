@@ -449,12 +449,28 @@ def should_wait_bcr_maintainer_review(modules):
 
 
 def upload_jobs_to_pipeline(pipeline_steps):
-    """Directly calling the buildkite-agent to upload steps."""
-    subprocess.run(
-        ["buildkite-agent", "pipeline", "upload"],
-        input=yaml.dump({"steps": pipeline_steps}).encode(),
-        check=True,
-    )
+    """Upload jobs to Buildkite in batches."""
+    BATCH_SIZE = 2000
+
+    # Make sure all jobs depends on the block step explicitly
+    # if we need multiple batches and the first step is a block step.
+    if len(pipeline_steps) > BATCH_SIZE and "block" in pipeline_steps[0]:
+        pipeline_steps[0]["key"] = "wait_for_approval"
+        for step in pipeline_steps[1:]:
+            step["depends_on"] = "wait_for_approval"
+
+    for i in range(0, len(pipeline_steps), BATCH_SIZE):
+        batch = pipeline_steps[i:i + BATCH_SIZE]
+        # Upload the batch to Buildkite
+        bazelci.eprint(f"Uploading batch {i // BATCH_SIZE + 1} of {len(pipeline_steps) // BATCH_SIZE + 1}")
+        try:
+            subprocess.run(
+                ["buildkite-agent", "pipeline", "upload"],
+                input=yaml.dump({"steps": batch}).encode(),
+                check=True,
+            )
+        except subprocess.CalledProcessError as e:
+            error(f"Failed to upload batch {i // BATCH_SIZE + 1} to Buildkite: {e}")
 
 
 def main(argv=None):
