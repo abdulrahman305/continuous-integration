@@ -242,6 +242,7 @@ DOWNSTREAM_PROJECTS_PRODUCTION = {
         "http_config": "https://raw.githubusercontent.com/bazelbuild/continuous-integration/master/pipelines/protobuf.yml",
         "pipeline_slug": "protobuf",
         "owned_by_bazel": True,
+        "disabled_reason": "https://github.com/protocolbuffers/protobuf/issues/18328"
     },
     "Stardoc": {
         "git_repository": "https://github.com/bazelbuild/stardoc.git",
@@ -499,6 +500,13 @@ PLATFORMS = {
         "docker-image": f"gcr.io/{DOCKER_REGISTRY_PREFIX}/ubuntu2204",
         "python": "python3",
     },
+    "ubuntu2404": {
+        "name": "Ubuntu 24.04",
+        "emoji-name": ":ubuntu: Ubuntu 24.04 LTS",
+        "publish_binary": [],
+        "docker-image": f"gcr.io/{DOCKER_REGISTRY_PREFIX}/ubuntu2404",
+        "python": "python3",
+    },
     "fedora39": {
         "name": "Fedora 39 (OpenJDK 17, gcc 13.1.1)",
         "emoji-name": ":fedora: Fedora 39 (OpenJDK 17, gcc 13.1.1)",
@@ -569,10 +577,9 @@ XCODE_VERSION_OVERRIDES = {"10.2.1": "10.3", "11.2": "11.2.1", "11.3": "11.3.1"}
 
 BUILD_LABEL_PATTERN = re.compile(r"^Build label: (\S+)$", re.MULTILINE)
 
-BUILDIFIER_STEP_NAME = "Buildifier"
-SHARD_SUMMARY_STEP_NAME = "Print Test Summary for Shards"
-
 SKIP_TASKS_ENV_VAR = "CI_SKIP_TASKS"
+
+RUNNER_CMD = "bazelci.py runner"
 
 # TODO: change to USE_BAZEL_DIFF once the feature has been tested in QA
 USE_BAZEL_DIFF_ENV_VAR = "USE_BAZEL_DIFF"
@@ -588,7 +595,7 @@ AUTO_DIFFBASE_VALUES = frozenset(["1", "true", "auto"])
 
 # Always run all test targets if any of the paths here are modified by the current commit.
 # Values can be directory paths (with a trailing slash) or file paths.
-DISABLE_BAZEL_DIFF_IF_MODIFIED = (".bazelci/", ".bazelversion", "MODULE.bazel")
+DISABLE_BAZEL_DIFF_IF_MODIFIED = (".bazelci/", ".bazelversion", "MODULE.bazel", "repositories.bzl")
 
 COMMIT_RE = re.compile(r"[0-9a-z]{40}")
 
@@ -607,12 +614,6 @@ ESCAPED_BACKSLASH = "%5C"
 # The maximum number of tasks allowed in one pipeline yaml config file.
 # This is to prevent accidentally creating too many tasks with the martix testing feature.
 MAX_TASK_NUMBER = 80
-
-LAB_AGENT_PATTERNS = [
-    re.compile(r"^bk-(trusted-)?imacpro-\d+$"),
-    re.compile(r"^bk-(trusted|testing)-macpro-\d+$"),
-    re.compile(r"^bk-(trusted-)?macstudio-\d+$"),
-]
 
 _TEST_BEP_FILE = "test_bep.json"
 _SHARD_RE = re.compile(r"(.+) \(shard (\d+)\)")
@@ -645,16 +646,22 @@ class BinaryUploadRaceException(Exception):
 
 
 class BuildkiteClient(object):
-    _ENCRYPTED_BUILDKITE_API_TOKEN = """
+    _ENCRYPTED_BUILDKITE_UNTRUSTED_API_TOKEN = """
 CiQA4DEB9ldzC+E39KomywtqXfaQ86hhulgeDsicds2BuvbCYzsSUAAqwcvXZPh9IMWlwWh94J2F
 exosKKaWB0tSRJiPKnv2NPDfEqGul0ZwVjtWeASpugwxxKeLhFhPMcgHMPfndH6j2GEIY6nkKRbP
 uwoRMCwe
 """.strip()
 
-    _ENCRYPTED_BUILDKITE_API_TESTING_TOKEN = """
+    _ENCRYPTED_BUILDKITE_TESTING_API_TOKEN = """
 CiQAMTBkWjL1C+F5oon3+cC1vmum5+c1y5+96WQY44p0Lxd0PeASUQAy7iU0c6E3W5EOSFYfD5fA
 MWy/SHaMno1NQSUa4xDOl5yc2kizrtxPPVkX4x9pLNuGUY/xwAn2n1DdiUdWZNWlY1bX2C4ex65e
 P9w8kNhEbw==
+""".strip()
+
+    _ENCRYPTED_BUILDKITE_TRUSTED_API_TOKEN = """
+CiQAeiOS8AkJ92+STSUmqW/jlR9DKDZdX5PZIWn30PtyKXWE/74SVwC7bbymSHneleAcgXtVJsMu
+2DEEVd/uEGIdiEJigmPAPTs4vtmX/7ZxTsMhJ+rxRYBGufw9LgT+G6Bjg0ETifavKWHGzw+NTgUa
+gwD6RBL0qz1PFfg7Zw==
 """.strip()
 
     _BUILD_STATUS_URL_TEMPLATE = (
@@ -677,27 +684,44 @@ P9w8kNhEbw==
     def _get_buildkite_token(self):
         return decrypt_token(
             encrypted_token=(
-                self._ENCRYPTED_BUILDKITE_API_TESTING_TOKEN
+                self._ENCRYPTED_BUILDKITE_TRUSTED_API_TOKEN
+                if THIS_IS_TRUSTED
+                else self._ENCRYPTED_BUILDKITE_TESTING_API_TOKEN
                 if THIS_IS_TESTING
-                else self._ENCRYPTED_BUILDKITE_API_TOKEN
+                else self._ENCRYPTED_BUILDKITE_UNTRUSTED_API_TOKEN
             ),
             kms_key=(
-                "buildkite-testing-api-token"
+                "buildkite-trusted-api-token"
+                if THIS_IS_TRUSTED
+                else "buildkite-testing-api-token"
                 if THIS_IS_TESTING
                 else "buildkite-untrusted-api-token"
             ),
+            project=("bazel-public" if THIS_IS_TRUSTED else "bazel-untrusted"),
         )
 
-    def _open_url(self, url, params=[]):
-        try:
-            params_str = "".join("&{}={}".format(k, v) for k, v in params)
-            return (
-                urllib.request.urlopen("{}?access_token={}{}".format(url, self._token, params_str))
-                .read()
-                .decode("utf-8", "ignore")
-            )
-        except urllib.error.HTTPError as ex:
-            raise BuildkiteException("Failed to open {}: {} - {}".format(url, ex.code, ex.reason))
+    def _open_url(self, url, params=[], retries=5):
+        params_str = "".join("&{}={}".format(k, v) for k, v in params)
+        full_url = "{}?access_token={}{}".format(url, self._token, params_str)
+
+        for attempt in range(retries):
+            try:
+                response = urllib.request.urlopen(full_url)
+                return response.read().decode("utf-8", "ignore")
+            except urllib.error.HTTPError as ex:
+                # Handle specific error codes
+                if ex.code == 429:  # Too Many Requests
+                    retry_after = ex.headers.get("RateLimit-Reset")
+                    if retry_after:
+                        wait_time = int(retry_after)
+                    else:
+                        wait_time = (2 ** attempt)  # Exponential backoff if no RateLimit-Reset header
+
+                    time.sleep(wait_time)
+                else:
+                    raise BuildkiteException("Failed to open {}: {} - {}".format(url, ex.code, ex.reason))
+
+        raise BuildkiteException(f"Failed to open {url} after {retries} retries.")
 
     def get_pipeline_info(self):
         """Get details for a pipeline given its organization slug
@@ -915,15 +939,6 @@ def is_mac():
     return platform_module.system() == "Darwin"
 
 
-def is_lab_machine():
-    agent = os.getenv("BUILDKITE_AGENT_NAME")
-    return any(p.match(agent) for p in LAB_AGENT_PATTERNS)
-
-
-def is_ipv6_mac():
-    return is_mac() and not is_lab_machine()
-
-
 def gsutil_command():
     return "gsutil.cmd" if is_windows() else "gsutil"
 
@@ -982,7 +997,7 @@ def get_expanded_task(task, combination):
     return expanded_task
 
 
-def fetch_configs(http_url, file_config):
+def fetch_configs(http_url, file_config, bazel_version=None):
     """
     If specified fetches the build configuration from file_config or http_url, else tries to
     read it from .bazelci/presubmit.yml.
@@ -991,7 +1006,7 @@ def fetch_configs(http_url, file_config):
     if file_config is not None and http_url is not None:
         raise BuildkiteException("file_config and http_url cannot be set at the same time")
 
-    return load_config(http_url, file_config)
+    return load_config(http_url, file_config, bazel_version=bazel_version)
 
 
 def expand_task_config(config):
@@ -1021,7 +1036,15 @@ def expand_task_config(config):
     config["tasks"].update(expanded_tasks)
 
 
-def load_config(http_url, file_config, allow_imports=True):
+def maybe_overwrite_bazel_version(bazel_version, config):
+    if not bazel_version:
+        return
+    for task in config.get("tasks", {}):
+        config["tasks"][task]["old_bazel"] = config["tasks"][task].get("bazel")
+        config["tasks"][task]["bazel"] = bazel_version
+
+
+def load_config(http_url, file_config, allow_imports=True, bazel_version=None):
     if http_url:
         config = load_remote_yaml_file(http_url)
     else:
@@ -1039,6 +1062,7 @@ def load_config(http_url, file_config, allow_imports=True):
     if "tasks" not in config:
         config["tasks"] = {}
 
+    maybe_overwrite_bazel_version(bazel_version, config)
     expand_task_config(config)
 
     imports = config.pop("imports", None)
@@ -1047,7 +1071,7 @@ def load_config(http_url, file_config, allow_imports=True):
             raise BuildkiteException("Nested imports are not allowed")
 
         for i in imports:
-            imported_tasks = load_imported_tasks(i, http_url, file_config)
+            imported_tasks = load_imported_tasks(i, http_url, file_config, bazel_version)
             config["tasks"].update(imported_tasks)
 
     if len(config["tasks"]) > MAX_TASK_NUMBER:
@@ -1064,7 +1088,7 @@ def load_remote_yaml_file(http_url):
         return yaml.safe_load(reader(resp))
 
 
-def load_imported_tasks(import_name, http_url, file_config):
+def load_imported_tasks(import_name, http_url, file_config, bazel_version):
     if "/" in import_name:
         raise BuildkiteException("Invalid import '%s'" % import_name)
 
@@ -1075,7 +1099,7 @@ def load_imported_tasks(import_name, http_url, file_config):
     else:
         file_config = new_path
 
-    imported_config = load_config(http_url=http_url, file_config=file_config, allow_imports=False)
+    imported_config = load_config(http_url=http_url, file_config=file_config, allow_imports=False, bazel_version=bazel_version)
 
     namespace = import_name.partition(".")[0]
     tasks = {}
@@ -1872,7 +1896,7 @@ def execute_bazel_run(bazel_binary, platform, targets):
 
 def remote_caching_flags(platform, accept_cached=True):
     # Only enable caching for untrusted and testing builds, except for trusted MacOS VMs.
-    if THIS_IS_TRUSTED and (not is_mac() or is_lab_machine()):
+    if THIS_IS_TRUSTED and not is_mac():
         return []
     # We don't enable remote caching on the Linux ARM64 machine since it doesn't have access to GCS.
     if platform == "ubuntu2004_arm64":
@@ -1895,41 +1919,36 @@ def remote_caching_flags(platform, accept_cached=True):
             subprocess.check_output(["/usr/bin/xcodebuild", "-version"]),
         ]
 
-    if is_mac() and is_lab_machine():
-        # Use a local cache server for our physical macOS machines in the lab.
-        flags = ["--remote_cache=grpc://[2a00:79e1:abc:8602:a28c:fdff:fed0:ec39]:9092"]
+    # Use GCS for caching builds running on MacService.
+    # Use RBE for caching builds running on GCE.
+    remote_cache_flags = []
+    if is_mac():
+        bucket_id = "trusted" if THIS_IS_TRUSTED else "untrusted"
+        remote_cache_flags = [
+            f"--remote_cache=https://storage.googleapis.com/bazel-{bucket_id}-build-cache"
+        ]
     else:
-        # Use GCS for caching builds running on MacService.
-        # Use RBE for caching builds running on GCE.
-        remote_cache_flags = []
-        if is_mac():
-            bucket_id = "trusted" if THIS_IS_TRUSTED else "untrusted"
-            remote_cache_flags = [
-                f"--remote_cache=https://storage.googleapis.com/bazel-{bucket_id}-build-cache"
+        remote_cache_flags = [
+            "--remote_cache=remotebuildexecution.googleapis.com",
+            "--remote_instance_name=projects/{}/instances/default_instance".format(CLOUD_PROJECT),
+        ]
+
+    flags = (
+        remote_cache_flags
+        + [
+            "--google_default_credentials",
+        ]
+        + (
+            []
+            if is_mac()
+            else [  # Re-enable on macOS once b/346751326 is resolved.
+                # Enable BES / Build Results reporting.
+                "--bes_backend=buildeventservice.googleapis.com",
+                "--bes_timeout=360s",
+                "--project_id=bazel-untrusted",
             ]
-        else:
-            remote_cache_flags = [
-                "--remote_cache=remotebuildexecution.googleapis.com",
-                "--remote_instance_name=projects/{}/instances/default_instance".format(
-                    CLOUD_PROJECT
-                ),
-            ]
-        flags = (
-            remote_cache_flags
-            + [
-                "--google_default_credentials",
-            ]
-            + (
-                []
-                if is_mac()
-                else [  # Re-enable on macOS once b/346751326 is resolved.
-                    # Enable BES / Build Results reporting.
-                    "--bes_backend=buildeventservice.googleapis.com",
-                    "--bes_timeout=360s",
-                    "--project_id=bazel-untrusted",
-                ]
-            )
         )
+    )
 
     platform_cache_digest = hashlib.sha256()
     for key in platform_cache_key:
@@ -1937,7 +1956,7 @@ def remote_caching_flags(platform, accept_cached=True):
         platform_cache_digest.update(key)
         platform_cache_digest.update(b":")
 
-    remote_timeout = 3600 if is_ipv6_mac() else 60
+    remote_timeout = 3600 if is_mac() else 60
     flags += [
         f"--remote_timeout={remote_timeout}",
         "--remote_max_connections=200",
@@ -1987,7 +2006,7 @@ def common_startup_flags():
         else:
             # This machine uses its PD-SSD as the build directory.
             return ["--output_user_root=C:/b"]
-    elif is_ipv6_mac():
+    elif is_mac():
         return ["--host_jvm_args=-Djava.net.preferIPv6Addresses=true"]
     return []
 
@@ -2024,7 +2043,7 @@ def common_build_flags(bep_file, platform):
             "--build_event_json_file=" + bep_file,
         ]
 
-    if is_ipv6_mac():
+    if is_mac():
         flags += ["--jvmopt=-Djava.net.preferIPv6Addresses"]
 
     return flags
@@ -2278,7 +2297,11 @@ def calculate_targets(
                 shard_id + 1, shard_count
             )
         )
-        actual_test_targets = get_targets_for_shard(actual_test_targets, shard_id, shard_count)
+        sorted_test_targets = sorted(actual_test_targets)
+        actual_test_targets = get_targets_for_shard(sorted_test_targets, shard_id, shard_count)
+
+        if shard_id == 0:
+            upload_shard_distribution(sorted_test_targets, shard_count)
 
     return build_targets, actual_test_targets, coverage_targets, index_targets
 
@@ -2465,6 +2488,23 @@ def filter_unchanged_targets(
     return remaining_targets
 
 
+def upload_shard_distribution(sorted_test_targets, shard_count):
+    tmpdir = tempfile.mkdtemp()
+    try:
+        data = {
+            s: get_targets_for_shard(sorted_test_targets, s, shard_count)
+            for s in range(shard_count)
+        }
+        base = f"{os.getenv('BUILDKITE_PIPELINE_SLUG')}_{os.getenv('BUILDKITE_BUILD_NUMBER')}_shards.json"
+        path = os.path.join(tmpdir, base)
+        with open(path, mode="w", encoding="utf-8") as fp:
+            json.dump(data, fp, indent=2, sort_keys=True)
+
+        execute_command(["buildkite-agent", "artifact", "upload", path], cwd=tmpdir)
+    finally:
+        shutil.rmtree(tmpdir)
+
+
 def fetch_base_branch():
     """Fetch the base branch for the current build, set FETCH_HEAD for git."""
     base_branch = os.getenv("BUILDKITE_PULL_REQUEST_BASE_BRANCH", "")
@@ -2586,9 +2626,9 @@ def partition_list(items):
     return included, excluded, added_back
 
 
-def get_targets_for_shard(test_targets, shard_id, shard_count):
+def get_targets_for_shard(sorted_test_targets, shard_id, shard_count):
     # TODO(fweikert): implement a more sophisticated algorithm
-    return sorted(test_targets)[shard_id::shard_count]
+    return sorted_test_targets[shard_id::shard_count]
 
 
 def execute_bazel_test(
@@ -2759,7 +2799,7 @@ def terminate_background_process(process):
             process.kill()
 
 
-def create_step(label, commands, platform, shards=1, soft_fail=None):
+def create_step(label, commands, platform, shards=1, soft_fail=None, concurrency=None, concurrency_group=None):
     if "docker-image" in PLATFORMS[platform]:
         step = create_docker_step(
             label,
@@ -2776,7 +2816,8 @@ def create_step(label, commands, platform, shards=1, soft_fail=None):
         }
 
     if shards > 1:
-        step["label"] += " (shard %n)"
+        # %N means shard counting starts at 1, not 0
+        step["label"] += " (shard %N)"
         step["parallelism"] = shards
 
     if soft_fail is not None:
@@ -2803,6 +2844,10 @@ def create_step(label, commands, platform, shards=1, soft_fail=None):
     if platform == "macos":
         step["retry"]["automatic"].append({"exit_status": 128, "limit": 1})
         step["retry"]["automatic"].append({"exit_status": 1, "limit": 1})
+
+    if concurrency and concurrency_group:
+        step["concurrency"] = concurrency
+        step["concurrency_group"] = concurrency_group
 
     return step
 
@@ -2899,7 +2944,7 @@ def print_project_pipeline(
 
         pipeline_steps.append(
             create_docker_step(
-                BUILDIFIER_STEP_NAME,
+                "Buildifier",
                 image=BUILDIFIER_DOCKER_IMAGE,
                 additional_env_vars=buildifier_env_vars,
             )
@@ -3043,7 +3088,7 @@ def print_project_pipeline(
     if actually_print_shard_summary:
         pipeline_steps.append(
             create_step(
-                label=SHARD_SUMMARY_STEP_NAME,
+                label="Print Test Summary for Shards",
                 commands=[
                     fetch_bazelcipy_command(),
                     PLATFORMS[DEFAULT_PLATFORM]["python"] + " bazelci.py print_shard_summary",
@@ -3205,7 +3250,8 @@ def runner_step(
     shards=1,
     soft_fail=None,
 ):
-    command = PLATFORMS[platform]["python"] + " bazelci.py runner --task=" + task
+    py = PLATFORMS[platform]["python"]
+    command = f"{py} {RUNNER_CMD} --task={task}"
     if http_config:
         command += " --http_config=" + http_config
     if file_config:
@@ -3293,7 +3339,8 @@ def bazel_build_step(
     build_only=False,
     test_only=False,
 ):
-    pipeline_command = PLATFORMS[platform]["python"] + " bazelci.py runner"
+    py = PLATFORMS[platform]["python"]
+    pipeline_command = f"{py} {RUNNER_CMD}"
     if build_only:
         pipeline_command += " --build_only --save_but"
     if test_only:
@@ -3434,6 +3481,21 @@ def print_bazel_publish_binaries_pipeline(task_configs, http_config, file_config
             platform=DEFAULT_PLATFORM,
         )
     )
+
+    if current_branch_is_main_branch():
+        pipeline_steps.append({"wait": None, "continue_on_failure": False})
+
+        pipeline_steps.append(
+            create_step(
+                label="Update last green commit for Bazel",
+                commands=[
+                    fetch_bazelcipy_command(),
+                    PLATFORMS[DEFAULT_PLATFORM]["python"]
+                    + " bazelci.py try_update_last_green_commit",
+                ],
+                platform=DEFAULT_PLATFORM,
+            )
+        )
 
     print_pipeline_steps(pipeline_steps)
 
@@ -3661,14 +3723,22 @@ def bazelci_builds_metadata_url(git_commit):
 
 
 def bazelci_last_green_commit_url(git_repository, pipeline_slug):
-    bucket_name = "bazel-testing-builds" if THIS_IS_TESTING else "bazel-untrusted-builds"
+    bucket_name = (
+        "bazel-builds"
+        if THIS_IS_TRUSTED
+        else "bazel-testing-builds"
+        if THIS_IS_TESTING
+        else "bazel-untrusted-last-green-commits"
+    )
     return "gs://{}/last_green_commit/{}/{}".format(
         bucket_name, git_repository[len("https://") :], pipeline_slug
     )
 
 
 def bazelci_last_green_downstream_commit_url():
-    bucket_name = "bazel-testing-builds" if THIS_IS_TESTING else "bazel-untrusted-builds"
+    bucket_name = (
+        "bazel-testing-builds" if THIS_IS_TESTING else "bazel-untrusted-last-green-commits"
+    )
     return "gs://{}/last_green_commit/downstream_pipeline".format(bucket_name)
 
 
@@ -3711,7 +3781,7 @@ def try_update_last_green_commit():
             and state != "passed"
             and not job.get("soft_failed")
             and job["id"] != current_job_id
-            and job["name"] not in (BUILDIFIER_STEP_NAME, SHARD_SUMMARY_STEP_NAME)
+            and RUNNER_CMD in job.get("command", "")  # Only look at test steps
         )
 
     failing_jobs = [j["name"] for j in build_info["jobs"] if has_failed(j)]
@@ -3840,8 +3910,6 @@ def print_shard_summary():
                         perf_stats.append(shard.get_metrics(test_execution.label, test_artifact))
 
                     if test_execution.overall_status == "PASSED":
-                        continue
-                    if len(test_execution.shards) == 1:
                         continue
 
                     failures.append(
@@ -4413,6 +4481,7 @@ def main(argv=None):
     runner.add_argument("--task", action="store", type=str, default="")
     runner.add_argument("--file_config", type=str)
     runner.add_argument("--http_config", type=str)
+    runner.add_argument("--overwrite_bazel_version", type=str, help="Overwrite the bazel version in the config file.")
     runner.add_argument("--git_repository", type=str)
     runner.add_argument(
         "--git_commit", type=str, help="Reset the git repository to this commit after cloning it"
@@ -4491,7 +4560,9 @@ def main(argv=None):
             elif args.git_repository:
                 clone_git_repository(args.git_repository, args.git_commit)
 
-            configs = fetch_configs(args.http_config, args.file_config)
+            # Maybe overwrite the bazel version for each task, we have to do it before the config expansion.
+            bazel_version = args.overwrite_bazel_version
+            configs = fetch_configs(args.http_config, args.file_config, bazel_version)
             tasks = configs.get("tasks", {})
             task_config = tasks.get(args.task)
             if not task_config:
@@ -4510,6 +4581,12 @@ def main(argv=None):
             # See https://github.com/bazelbuild/continuous-integration/issues/1218
             if "BUILDKITE_MESSAGE" in os.environ:
                 os.environ["BUILDKITE_MESSAGE"] = os.environ["BUILDKITE_MESSAGE"][:1000]
+
+            # Give user a warning that the bazel version in the config file has been overridden.
+            old_bazel = task_config.get("old_bazel")
+            if old_bazel:
+                new_bazel = task_config.get("bazel")
+                print_collapsed_group(f":bazel: Bazel version overridden from {old_bazel} to {new_bazel}")
 
             execute_commands(
                 task_config=task_config,
