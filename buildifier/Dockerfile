@@ -1,4 +1,4 @@
-FROM python:3.12.4-alpine3.20
+FROM python:3.14.0a2-alpine3.20
 
 COPY --chown=root:root buildifier.py /usr/local/bin/buildifier.py
 
