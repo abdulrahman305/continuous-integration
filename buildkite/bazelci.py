@@ -38,9 +38,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-import threading
 import time
-from typing import Sequence
 import urllib.error
 import urllib.request
 import yaml
@@ -48,7 +46,7 @@ import yaml
 # Initialize the random number generator.
 random.seed()
 
-BUILDKITE_ORG = os.environ["BUILDKITE_ORGANIZATION_SLUG"]
+BUILDKITE_ORG = os.environ.get("BUILDKITE_ORGANIZATION_SLUG", "bazel")
 THIS_IS_PRODUCTION = BUILDKITE_ORG == "bazel"
 THIS_IS_TESTING = BUILDKITE_ORG == "bazel-testing"
 THIS_IS_TRUSTED = BUILDKITE_ORG == "bazel-trusted"
@@ -93,11 +91,6 @@ LOG_BUCKET = {
 
 # Projects can opt out of receiving GitHub issues from --notify by adding `"do_not_notify": True` to their respective downstream entry.
 DOWNSTREAM_PROJECTS_PRODUCTION = {
-    "Android Studio Plugin": {
-        "git_repository": "https://github.com/bazelbuild/intellij.git",
-        "file_config": ".bazelci/android-studio.yml",
-        "pipeline_slug": "android-studio-plugin",
-    },
     "Android Studio Plugin Google": {
         "git_repository": "https://github.com/bazelbuild/intellij.git",
         "file_config": ".bazelci/android-studio.yml",
@@ -119,11 +112,6 @@ DOWNSTREAM_PROJECTS_PRODUCTION = {
         "file_config": ".bazelci/postsubmit.yml",
         "pipeline_slug": "bazel-bench",
     },
-    "Bazel Codelabs": {
-        "git_repository": "https://github.com/bazelbuild/codelabs.git",
-        "pipeline_slug": "bazel-codelabs",
-        "disabled_reason": "https://github.com/bazelbuild/codelabs/issues/38",
-    },
     "Bazel Examples": {
         "git_repository": "https://github.com/bazelbuild/examples.git",
         "pipeline_slug": "bazel-bazel-examples",
@@ -141,18 +129,13 @@ DOWNSTREAM_PROJECTS_PRODUCTION = {
         "git_repository": "https://github.com/bazelbuild/bazel-toolchains.git",
         "pipeline_slug": "bazel-toolchains",
     },
-    "Bazel watcher": {
-        "git_repository": "https://github.com/bazelbuild/bazel-watcher.git",
-        "pipeline_slug": "bazel-watcher",
-        "disabled_reason": "https://github.com/bazelbuild/bazel-watcher/issues/590",
-    },
     "Bazelisk": {
         "git_repository": "https://github.com/bazelbuild/bazelisk.git",
         "file_config": ".bazelci/config.yml",
         "pipeline_slug": "bazelisk",
     },
     "Buildfarm": {
-        "git_repository": "https://github.com/bazelbuild/bazel-buildfarm.git",
+        "git_repository": "https://github.com/buildfarm/buildfarm.git",
         "pipeline_slug": "buildfarm-farmer",
     },
     "Buildtools": {
@@ -169,39 +152,15 @@ DOWNSTREAM_PROJECTS_PRODUCTION = {
         "file_config": ".bazelci/clion.yml",
         "pipeline_slug": "clion-plugin-google",
     },
-    "Cartographer": {
-        "git_repository": "https://github.com/googlecartographer/cartographer.git",
-        "pipeline_slug": "cartographer",
-        "disabled_reason": "https://github.com/cartographer-project/cartographer/issues/1938#issuecomment-1804795113",
-    },
     "Cloud Robotics Core": {
         "git_repository": "https://github.com/googlecloudrobotics/core.git",
         "http_config": "https://raw.githubusercontent.com/bazelbuild/continuous-integration/master/pipelines/cloud-robotics.yml",
         "pipeline_slug": "cloud-robotics-core",
     },
-    "Envoy": {
-        "git_repository": "https://github.com/envoyproxy/envoy.git",
-        "pipeline_slug": "envoy",
-        "disabled_reason": "https://github.com/envoyproxy/envoy/issues/29723",
-    },
-    "FlatBuffers": {
-        "git_repository": "https://github.com/google/flatbuffers.git",
-        "pipeline_slug": "flatbuffers",
-        "disabled_reason": "https://github.com/google/flatbuffers/issues/7992",
-    },
     "Flogger": {
         "git_repository": "https://github.com/google/flogger.git",
         "http_config": "https://raw.githubusercontent.com/bazelbuild/continuous-integration/master/pipelines/flogger.yml",
         "pipeline_slug": "flogger",
-    },
-    "Gerrit": {
-        "git_repository": "https://gerrit.googlesource.com/gerrit.git",
-        "http_config": "https://raw.githubusercontent.com/bazelbuild/continuous-integration/master/pipelines/gerrit.yml",
-        "pipeline_slug": "gerrit",
-    },
-    "Google Logging": {
-        "git_repository": "https://github.com/google/glog.git",
-        "pipeline_slug": "google-logging",
     },
     "IntelliJ Plugin": {
         "git_repository": "https://github.com/bazelbuild/intellij.git",
@@ -233,17 +192,6 @@ DOWNSTREAM_PROJECTS_PRODUCTION = {
         "file_config": ".bazelci/aspect.yml",
         "pipeline_slug": "intellij-plugin-aspect-google",
     },
-    "Kythe": {
-        "git_repository": "https://github.com/kythe/kythe.git",
-        "pipeline_slug": "kythe",
-    },
-    "Protobuf": {
-        "git_repository": "https://github.com/google/protobuf.git",
-        "http_config": "https://raw.githubusercontent.com/bazelbuild/continuous-integration/master/pipelines/protobuf.yml",
-        "pipeline_slug": "protobuf",
-        "owned_by_bazel": True,
-        "disabled_reason": "https://github.com/protocolbuffers/protobuf/issues/18328"
-    },
     "Stardoc": {
         "git_repository": "https://github.com/bazelbuild/stardoc.git",
         "pipeline_slug": "stardoc",
@@ -255,22 +203,15 @@ DOWNSTREAM_PROJECTS_PRODUCTION = {
         "pipeline_slug": "tensorflow",
         "disabled_reason": "https://github.com/tensorflow/tensorflow/issues/60508",
     },
-    "re2": {
-        "git_repository": "https://github.com/google/re2.git",
-        "http_config": "https://raw.githubusercontent.com/bazelbuild/continuous-integration/master/pipelines/re2.yml",
-        "pipeline_slug": "re2",
-    },
     "rules_android": {
         "git_repository": "https://github.com/bazelbuild/rules_android.git",
         "pipeline_slug": "rules-android",
+        "owned_by_bazel": True,
     },
     "rules_android_ndk": {
         "git_repository": "https://github.com/bazelbuild/rules_android_ndk.git",
         "pipeline_slug": "rules-android-ndk",
-    },
-    "rules_apple": {
-        "git_repository": "https://github.com/bazelbuild/rules_apple.git",
-        "pipeline_slug": "rules-apple-darwin",
+        "owned_by_bazel": True,
     },
     "rules_cc": {
         "git_repository": "https://github.com/bazelbuild/rules_cc.git",
@@ -278,109 +219,28 @@ DOWNSTREAM_PROJECTS_PRODUCTION = {
         "owned_by_bazel": True,
         "disabled_reason": "https://github.com/bazelbuild/rules_cc/issues/190",
     },
-    "rules_closure": {
-        "git_repository": "https://github.com/bazelbuild/rules_closure.git",
-        "pipeline_slug": "rules-closure-closure-compiler",
-        "owned_by_bazel": True,
-    },
-    "rules_dotnet": {
-        "git_repository": "https://github.com/bazelbuild/rules_dotnet.git",
-        "pipeline_slug": "rules-dotnet-edge",
-    },
-    "rules_foreign_cc": {
-        "git_repository": "https://github.com/bazelbuild/rules_foreign_cc.git",
-        "file_config": ".bazelci/config.yaml",
-        "pipeline_slug": "rules-foreign-cc",
-        "owned_by_bazel": True,
-    },
-    "rules_go": {
-        "git_repository": "https://github.com/bazelbuild/rules_go.git",
-        "pipeline_slug": "rules-go-golang",
-    },
-    "rules_graalvm": {
-        "git_repository": "https://github.com/sgammon/rules_graalvm.git",
-        "pipeline_slug": "rules-graalvm",
-        "disabled_reason": "https://github.com/sgammon/rules_graalvm/issues/409",
-    },
-    "rules_haskell": {
-        "git_repository": "https://github.com/tweag/rules_haskell.git",
-        "pipeline_slug": "rules-haskell-haskell",
-    },
-    "rules_jsonnet": {
-        "git_repository": "https://github.com/bazelbuild/rules_jsonnet.git",
-        "pipeline_slug": "rules-jsonnet",
-        "disabled_reason": "https://github.com/bazelbuild/rules_jsonnet/issues/194",
-    },
-    "rules_jvm_external": {
-        "git_repository": "https://github.com/bazelbuild/rules_jvm_external.git",
-        "pipeline_slug": "rules-jvm-external",
-        "owned_by_bazel": True,
-    },
-    "rules_jvm_external - examples": {
-        "git_repository": "https://github.com/bazelbuild/rules_jvm_external.git",
-        "file_config": ".bazelci/examples.yml",
-        "pipeline_slug": "rules-jvm-external-examples",
-        "owned_by_bazel": True,
-    },
-    "rules_kotlin": {
-        "git_repository": "https://github.com/bazelbuild/rules_kotlin.git",
-        "pipeline_slug": "rules-kotlin-kotlin",
-    },
-    "rules_nodejs": {
-        "git_repository": "https://github.com/bazelbuild/rules_nodejs.git",
-        "pipeline_slug": "rules-nodejs-nodejs",
-    },
-    "rules_perl": {
-        "git_repository": "https://github.com/bazelbuild/rules_perl.git",
-        "pipeline_slug": "rules-perl",
-    },
     "rules_platform": {
         "git_repository": "https://github.com/bazelbuild/rules_platform.git",
         "pipeline_slug": "rules-platform",
-    },
-    "rules_proto": {
-        "git_repository": "https://github.com/bazelbuild/rules_proto.git",
-        "pipeline_slug": "rules-proto",
         "owned_by_bazel": True,
     },
     "rules_python": {
         "git_repository": "https://github.com/bazelbuild/rules_python.git",
         "pipeline_slug": "rules-python-python",
-        "owned_by_bazel": True,
-    },
-    "rules_rust": {
-        "git_repository": "https://github.com/bazelbuild/rules_rust.git",
-        "pipeline_slug": "rules-rust-rustlang",
-        "disabled_reason": "https://github.com/bazelbuild/rules_rust/issues/2519, https://github.com/bazelbuild/rules_rust/issues/2464",
-    },
-    "rules_scala": {
-        "git_repository": "https://github.com/bazelbuild/rules_scala.git",
-        "pipeline_slug": "rules-scala-scala",
-        "disabled_reason": "waiting on https://github.com/bazelbuild/rules_scala/pull/1422",
-    },
-    "rules_swift": {
-        "git_repository": "https://github.com/bazelbuild/rules_swift.git",
-        "pipeline_slug": "rules-swift-swift",
     },
     "rules_testing": {
         "git_repository": "https://github.com/bazelbuild/rules_testing.git",
         "pipeline_slug": "rules-testing",
         "owned_by_bazel": True,
     },
-    "rules_webtesting": {
-        "git_repository": "https://github.com/bazelbuild/rules_webtesting.git",
-        "pipeline_slug": "rules-webtesting-saucelabs",
-    },
 }
 
 DOWNSTREAM_PROJECTS_TESTING = {
     "Bazel": DOWNSTREAM_PROJECTS_PRODUCTION["Bazel"],
     "Bazelisk": DOWNSTREAM_PROJECTS_PRODUCTION["Bazelisk"],
-    "rules_go": DOWNSTREAM_PROJECTS_PRODUCTION["rules_go"],
-    "rules_kotlin": DOWNSTREAM_PROJECTS_PRODUCTION["rules_kotlin"],
-    "rules_nodejs": DOWNSTREAM_PROJECTS_PRODUCTION["rules_nodejs"],
-    "rules_rust": DOWNSTREAM_PROJECTS_PRODUCTION["rules_rust"],
-    "rules_scala": DOWNSTREAM_PROJECTS_PRODUCTION["rules_scala"],
+    "rules_android": DOWNSTREAM_PROJECTS_PRODUCTION["rules_android"],
+    "rules_cc": DOWNSTREAM_PROJECTS_PRODUCTION["rules_cc"],
+    "rules_testing": DOWNSTREAM_PROJECTS_PRODUCTION["rules_testing"],
 }
 
 DOWNSTREAM_PROJECTS = {
@@ -486,6 +346,13 @@ PLATFORMS = {
         "docker-image": f"gcr.io/{DOCKER_REGISTRY_PREFIX}/ubuntu2204-kythe",
         "python": "python3",
     },
+    "kythe_ubuntu2404": {
+        "name": "Kythe (Ubuntu 24.04 LTS)",
+        "emoji-name": "Kythe (:ubuntu: Ubuntu 24.04 LTS)",
+        "publish_binary": [],
+        "docker-image": f"gcr.io/{DOCKER_REGISTRY_PREFIX}/ubuntu2404-kythe",
+        "python": "python3",
+    },
     "ubuntu2204_java17": {
         "name": "Ubuntu 22.04 (OpenJDK 17, gcc 11.2.0)",
         "emoji-name": ":ubuntu: Ubuntu 22.04 (OpenJDK 17, gcc 11.2.0)",
@@ -588,7 +455,7 @@ BAZEL_DIFF_ANNOTATION_CTX = "'diff'"
 
 # TODO(fweikert): Install bazel-diff on the Docker images and on the Mac machines
 BAZEL_DIFF_URL = (
-    "https://github.com/Tinder/bazel-diff/releases/download/4.5.0/bazel-diff_deploy.jar"
+    "https://github.com/Tinder/bazel-diff/releases/download/8.1.1/bazel-diff_deploy.jar"
 )
 
 AUTO_DIFFBASE_VALUES = frozenset(["1", "true", "auto"])
@@ -613,11 +480,15 @@ ESCAPED_BACKSLASH = "%5C"
 
 # The maximum number of tasks allowed in one pipeline yaml config file.
 # This is to prevent accidentally creating too many tasks with the martix testing feature.
-MAX_TASK_NUMBER = 80
+MAX_TASK_NUMBER = 128
 
 _TEST_BEP_FILE = "test_bep.json"
 _SHARD_RE = re.compile(r"(.+) \(shard (\d+)\)")
 _SLOWEST_N_TARGETS = 20
+
+# Pipelines with elevated priority. Values are project slugs,
+# i.e. "org_slug/pipeline_slug".
+_PRIORITY_PIPELINES = frozenset(["bazel/google-bazel-presubmit"])
 
 
 class BuildkiteException(Exception):
@@ -715,11 +586,13 @@ gwD6RBL0qz1PFfg7Zw==
                     if retry_after:
                         wait_time = int(retry_after)
                     else:
-                        wait_time = (2 ** attempt)  # Exponential backoff if no RateLimit-Reset header
+                        wait_time = 2**attempt  # Exponential backoff if no RateLimit-Reset header
 
                     time.sleep(wait_time)
                 else:
-                    raise BuildkiteException("Failed to open {}: {} - {}".format(url, ex.code, ex.reason))
+                    raise BuildkiteException(
+                        "Failed to open {}: {} - {}".format(url, ex.code, ex.reason)
+                    )
 
         raise BuildkiteException(f"Failed to open {url} after {retries} retries.")
 
@@ -1042,6 +915,10 @@ def maybe_overwrite_bazel_version(bazel_version, config):
     for task in config.get("tasks", {}):
         config["tasks"][task]["old_bazel"] = config["tasks"][task].get("bazel")
         config["tasks"][task]["bazel"] = bazel_version
+    matrix = config.get("matrix", {})
+    if "bazel" in matrix:
+        # This will only apply to "old_bazel" and avoid generating multiple tasks with the same config
+        matrix["bazel"] = [", ".join(matrix["bazel"])]
 
 
 def load_config(http_url, file_config, allow_imports=True, bazel_version=None):
@@ -1076,7 +953,8 @@ def load_config(http_url, file_config, allow_imports=True, bazel_version=None):
 
     if len(config["tasks"]) > MAX_TASK_NUMBER:
         raise BuildkiteException(
-            "The number of tasks in one config file is limited to %s!" % MAX_TASK_NUMBER
+            "The number of tasks in one config file is limited to %s, found %s!"
+            % (MAX_TASK_NUMBER, len(config["tasks"])),
         )
 
     return config
@@ -1099,7 +977,9 @@ def load_imported_tasks(import_name, http_url, file_config, bazel_version):
     else:
         file_config = new_path
 
-    imported_config = load_config(http_url=http_url, file_config=file_config, allow_imports=False, bazel_version=bazel_version)
+    imported_config = load_config(
+        http_url=http_url, file_config=file_config, allow_imports=False, bazel_version=bazel_version
+    )
 
     namespace = import_name.partition(".")[0]
     tasks = {}
@@ -1247,297 +1127,293 @@ def execute_commands(
         eprint(json.dumps(task_config, indent=2))
 
     tmpdir = tempfile.mkdtemp()
-    sc_process = None
-    try:
-        if is_mac():
-            activate_xcode(task_config)
+    if is_mac():
+        activate_xcode(task_config)
 
-        # If the CI worker runs Bazelisk, we need to forward all required env variables to the test.
-        # Otherwise any integration test that invokes Bazel (=Bazelisk in this case) will fail.
-        test_env_vars = ["LocalAppData"] if platform == "windows" else ["HOME"]
+    # If the CI worker runs Bazelisk, we need to forward all required env variables to the test.
+    # Otherwise any integration test that invokes Bazel (=Bazelisk in this case) will fail.
+    test_env_vars = ["LocalAppData"] if platform == "windows" else ["HOME"]
 
-        # CI should have its own user agent so that we can remove it from Bazel download statistics.
-        os.environ["BAZELISK_USER_AGENT"] = "Bazelisk/BazelCI"
-        test_env_vars.append("BAZELISK_USER_AGENT")
+    # CI should have its own user agent so that we can remove it from Bazel download statistics.
+    os.environ["BAZELISK_USER_AGENT"] = "Bazelisk/BazelCI"
+    test_env_vars.append("BAZELISK_USER_AGENT")
 
-        # We use one binary for all Linux platforms (because we also just release one binary for all
-        # Linux versions and we have to ensure that it works on all of them).
-        binary_platform = platform if is_mac() or is_windows() else LINUX_BINARY_PLATFORM
+    # We use one binary for all Linux platforms (because we also just release one binary for all
+    # Linux versions and we have to ensure that it works on all of them).
+    binary_platform = platform if is_mac() or is_windows() else LINUX_BINARY_PLATFORM
 
-        bazel_binary = "bazel"
-        if use_bazel_at_commit:
-            print_collapsed_group(":gcloud: Downloading Bazel built at " + use_bazel_at_commit)
-            # Linux binaries are published under platform name "centos7"
-            if binary_platform == LINUX_BINARY_PLATFORM:
-                binary_platform = "centos7"
-            os.environ["USE_BAZEL_VERSION"] = download_bazel_binary_at_commit(
-                tmpdir, binary_platform, use_bazel_at_commit
+    bazel_binary = "bazel"
+    if use_bazel_at_commit:
+        print_collapsed_group(":gcloud: Downloading Bazel built at " + use_bazel_at_commit)
+        # Linux binaries are published under platform name "centos7"
+        if binary_platform == LINUX_BINARY_PLATFORM:
+            binary_platform = "centos7"
+        os.environ["USE_BAZEL_VERSION"] = download_bazel_binary_at_commit(
+            tmpdir, binary_platform, use_bazel_at_commit
+        )
+        print_collapsed_group(":bazel: Using Bazel at " + os.environ["USE_BAZEL_VERSION"])
+    elif use_but:
+        print_collapsed_group(":gcloud: Downloading Bazel Under Test")
+        os.environ["USE_BAZEL_VERSION"] = download_bazel_binary(tmpdir, binary_platform)
+        print_collapsed_group(":bazel: Using Bazel at " + os.environ["USE_BAZEL_VERSION"])
+    else:
+        print_collapsed_group(":bazel: Using Bazel version " + bazel_version)
+        if bazel_version:
+            os.environ["USE_BAZEL_VERSION"] = bazel_version
+    if "USE_BAZEL_VERSION" in os.environ and not task_config.get(
+        "skip_use_bazel_version_for_test", False
+    ):
+        # This will only work if the bazel binary in $PATH is actually a bazelisk binary
+        # (https://github.com/bazelbuild/bazelisk).
+        test_env_vars.append("USE_BAZEL_VERSION")
+
+    for key, value in task_config.get("environment", {}).items():
+        # We have to explicitly convert the value to a string, because sometimes YAML tries to
+        # be smart and converts strings like "true" and "false" to booleans.
+        os.environ[key] = os.path.expandvars(str(value))
+
+    # Avoid "Network is unreachable" errors in IPv6-only environments
+    for e in ("COURSIER_OPTS", "JAVA_TOOL_OPTIONS", "SSL_CERT_FILE"):
+        # If users overrode a variable with an empty value above, it won't be added here.
+        if os.getenv(e):
+            test_env_vars.append(e)
+
+    # Set BAZELISK_SHUTDOWN to 1 when we use bazelisk --migrate on Windows.
+    # This is a workaround for https://github.com/bazelbuild/continuous-integration/issues/1012
+    if use_bazelisk_migrate() and platform == "windows":
+        os.environ["BAZELISK_SHUTDOWN"] = "1"
+
+    def PrepareRepoInCwd(print_cmd_groups, initial_setup=False):
+        # Allow the config to override the current working directory.
+        requested_working_dir = task_config.get("working_directory")
+        if requested_working_dir:
+            if os.path.isabs(requested_working_dir):
+                raise BuildkiteException(
+                    f"working_directory must be relative to the repository root, "
+                    "but was {requested_working_dir}"
+                )
+
+            full_requested_working_dir = os.path.abspath(requested_working_dir)
+            if not os.path.isdir(full_requested_working_dir):
+                raise BuildkiteException(
+                    f"{full_requested_working_dir} does not exist or is not a directory"
+                )
+
+            os.chdir(full_requested_working_dir)
+
+        # Dirty workaround for #1660
+        if initial_setup:
+            # Run `bazel --version` to make sure Bazel is fetched.
+            run_bazel_version(bazel_binary)
+
+            # Set OUTPUT_BASE environment variable
+            os.environ["OUTPUT_BASE"] = get_output_base(bazel_binary)
+
+            cmd_exec_func = (
+                execute_batch_commands if platform == "windows" else execute_shell_commands
             )
-            print_collapsed_group(":bazel: Using Bazel at " + os.environ["USE_BAZEL_VERSION"])
-        elif use_but:
-            print_collapsed_group(":gcloud: Downloading Bazel Under Test")
-            os.environ["USE_BAZEL_VERSION"] = download_bazel_binary(tmpdir, binary_platform)
-            print_collapsed_group(":bazel: Using Bazel at " + os.environ["USE_BAZEL_VERSION"])
-        else:
-            print_collapsed_group(":bazel: Using Bazel version " + bazel_version)
-            if bazel_version:
-                os.environ["USE_BAZEL_VERSION"] = bazel_version
-        if "USE_BAZEL_VERSION" in os.environ and not task_config.get(
-            "skip_use_bazel_version_for_test", False
-        ):
-            # This will only work if the bazel binary in $PATH is actually a bazelisk binary
-            # (https://github.com/bazelbuild/bazelisk).
-            test_env_vars.append("USE_BAZEL_VERSION")
-
-        for key, value in task_config.get("environment", {}).items():
-            # We have to explicitly convert the value to a string, because sometimes YAML tries to
-            # be smart and converts strings like "true" and "false" to booleans.
-            os.environ[key] = os.path.expandvars(str(value))
-
-        # Avoid "Network is unreachable" errors in IPv6-only environments
-        for e in ("COURSIER_OPTS", "JAVA_TOOL_OPTIONS", "SSL_CERT_FILE"):
-            # If users overrode a variable with an empty value above, it won't be added here.
-            if os.getenv(e):
-                test_env_vars.append(e)
-
-        # Set BAZELISK_SHUTDOWN to 1 when we use bazelisk --migrate on Windows.
-        # This is a workaround for https://github.com/bazelbuild/continuous-integration/issues/1012
-        if use_bazelisk_migrate() and platform == "windows":
-            os.environ["BAZELISK_SHUTDOWN"] = "1"
-
-        def PrepareRepoInCwd(print_cmd_groups, initial_setup=False):
-            # Allow the config to override the current working directory.
-            requested_working_dir = task_config.get("working_directory")
-            if requested_working_dir:
-                if os.path.isabs(requested_working_dir):
-                    raise BuildkiteException(
-                        f"working_directory must be relative to the repository root, "
-                        "but was {requested_working_dir}"
-                    )
-
-                full_requested_working_dir = os.path.abspath(requested_working_dir)
-                if not os.path.isdir(full_requested_working_dir):
-                    raise BuildkiteException(
-                        f"{full_requested_working_dir} does not exist or is not a directory"
-                    )
-
-                os.chdir(full_requested_working_dir)
-
-            # Dirty workaround for #1660
-            if initial_setup:
-                # Set OUTPUT_BASE environment variable
-                os.environ["OUTPUT_BASE"] = get_output_base(bazel_binary)
-
-                cmd_exec_func = (
-                    execute_batch_commands if platform == "windows" else execute_shell_commands
-                )
-                cmd_exec_func(task_config.get("setup", None))
-
-            if platform == "windows":
-                execute_batch_commands(task_config.get("batch_commands", None), print_cmd_groups)
-            else:
-                execute_shell_commands(task_config.get("shell_commands", None), print_cmd_groups)
-
-        PrepareRepoInCwd(True, initial_setup=True)
-
-        bazel_version = print_bazel_version_info(bazel_binary, platform)
-
-        print_environment_variables_info()
-
-        execute_bazel_run(bazel_binary, platform, task_config.get("run_targets", None))
-
-        if needs_clean:
-            execute_bazel_clean(bazel_binary, platform)
-
-        # we need the commit here in order to calculate the correct targets.
-        git_commit = os.getenv("BUILDKITE_COMMIT")
-        if not git_commit:
-            raise BuildkiteInfraException("Unable to determine Git commit for this build")
-
-        test_flags, json_profile_out_test, capture_corrupted_outputs_dir_test = calculate_flags(
-            task_config, "test_flags", "test", tmpdir, test_env_vars
-        )
-
-        build_targets, test_targets, coverage_targets, index_targets = calculate_targets(
-            task_config,
-            bazel_binary,
-            build_only,
-            test_only,
-            os.getcwd(),
-            PrepareRepoInCwd,
-            git_commit,
-            test_flags,
-        )
-
-        if build_targets:
-            (
-                build_flags,
-                json_profile_out_build,
-                capture_corrupted_outputs_dir_build,
-            ) = calculate_flags(task_config, "build_flags", "build", tmpdir, test_env_vars)
-            try:
-                release_name = get_release_name_from_branch_name()
-                execute_bazel_build(
-                    bazel_version,
-                    bazel_binary,
-                    platform,
-                    build_flags
-                    + (
-                        ["--stamp", "--embed_label=%s" % release_name]
-                        if save_but and release_name
-                        else []
-                    ),
-                    build_targets,
-                    None,
-                )
-                if save_but:
-                    upload_bazel_binary(platform)
-            finally:
-                if json_profile_out_build:
-                    upload_json_profile(json_profile_out_build, tmpdir)
-                if capture_corrupted_outputs_dir_build:
-                    upload_corrupted_outputs(capture_corrupted_outputs_dir_build, tmpdir)
-
-        if test_targets:
-            if not is_windows():
-                # On platforms that support sandboxing (Linux, MacOS) we have
-                # to allow access to Bazelisk's cache directory.
-                # However, the flag requires the directory to exist,
-                # so we create it here in order to not crash when a test
-                # does not invoke Bazelisk.
-                bazelisk_cache_dir = get_bazelisk_cache_directory()
-                os.makedirs(bazelisk_cache_dir, mode=0o755, exist_ok=True)
-                test_flags.append("--sandbox_writable_path={}".format(bazelisk_cache_dir))
-
-            # Set BUILDKITE_ANALYTICS_TOKEN so that bazelci-agent can upload test results to Test Analytics
-            if "ENCRYPTED_BUILDKITE_ANALYTICS_TOKEN" in os.environ:
-                if THIS_IS_TESTING:
-                    kms_key = "buildkite-testing-api-token"
-                    project = "bazel-untrusted"
-                elif THIS_IS_TRUSTED:
-                    kms_key = "buildkite-trusted-api-token"
-                    project = "bazel-public"
-                else:
-                    kms_key = "buildkite-untrusted-api-token"
-                    project = "bazel-untrusted"
-
-                try:
-                    os.environ["BUILDKITE_ANALYTICS_TOKEN"] = decrypt_token(
-                        encrypted_token=os.environ["ENCRYPTED_BUILDKITE_ANALYTICS_TOKEN"],
-                        kms_key=kms_key,
-                        project=project,
-                    )
-                except Exception as ex:
-                    print_collapsed_group(
-                        ":rotating_light: Test analytics disabled due to an error :warning:"
-                    )
-                    eprint(ex)
-
-            test_bep_file = os.path.join(tmpdir, _TEST_BEP_FILE)
-            # Create an empty test_bep_file so that the bazelci-agent can start to follow the file right away. Otherwise,
-            # there is a race between when bazelci-agent starts to read the file and when Bazel creates the file.
-            open(test_bep_file, "w").close()
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                future = executor.submit(
-                    upload_test_logs_from_bep, test_bep_file, tmpdir, monitor_flaky_tests
-                )
-                try:
-                    execute_bazel_test(
-                        bazel_version,
-                        bazel_binary,
-                        platform,
-                        test_flags,
-                        test_targets,
-                        test_bep_file,
-                        monitor_flaky_tests,
-                    )
-                finally:
-                    if json_profile_out_test:
-                        upload_json_profile(json_profile_out_test, tmpdir)
-                    if capture_corrupted_outputs_dir_test:
-                        upload_corrupted_outputs(capture_corrupted_outputs_dir_test, tmpdir)
-
-                _ = future.result()
-                # TODO: print results
-
-        if coverage_targets:
-            (
-                coverage_flags,
-                json_profile_out_coverage,
-                capture_corrupted_outputs_dir_coverage,
-            ) = calculate_flags(task_config, "coverage_flags", "coverage", tmpdir, test_env_vars)
-            try:
-                execute_bazel_coverage(
-                    bazel_version,
-                    bazel_binary,
-                    platform,
-                    coverage_flags,
-                    coverage_targets,
-                )
-            finally:
-                if json_profile_out_coverage:
-                    upload_json_profile(json_profile_out_coverage, tmpdir)
-                if capture_corrupted_outputs_dir_coverage:
-                    upload_corrupted_outputs(capture_corrupted_outputs_dir_coverage, tmpdir)
-
-        if index_targets:
-            (
-                index_flags,
-                json_profile_out_index,
-                capture_corrupted_outputs_dir_index,
-            ) = calculate_flags(task_config, "index_flags", "index", tmpdir, test_env_vars)
-            index_upload_policy = task_config.get("index_upload_policy", "IfBuildSuccess")
-            index_upload_gcs = task_config.get("index_upload_gcs", False)
-
-            try:
-                should_upload_kzip = (
-                    True if index_upload_policy == INDEX_UPLOAD_POLICY_ALWAYS else False
-                )
-                try:
-                    execute_bazel_build_with_kythe(
-                        bazel_version,
-                        bazel_binary,
-                        platform,
-                        index_flags,
-                        index_targets,
-                        None,
-                    )
-
-                    if index_upload_policy == INDEX_UPLOAD_POLICY_IF_BUILD_SUCCESS:
-                        should_upload_kzip = True
-                except subprocess.CalledProcessError as e:
-                    # If not running with Always policy, raise the build error.
-                    if index_upload_policy != INDEX_UPLOAD_POLICY_ALWAYS:
-                        handle_bazel_failure(e, "build")
-
-                if should_upload_kzip and not is_pull_request():
-                    try:
-                        merge_and_upload_kythe_kzip(platform, index_upload_gcs)
-                    except subprocess.CalledProcessError:
-                        raise BuildkiteException("Failed to upload kythe kzip")
-            finally:
-                if json_profile_out_index:
-                    upload_json_profile(json_profile_out_index, tmpdir)
-                if capture_corrupted_outputs_dir_index:
-                    upload_corrupted_outputs(capture_corrupted_outputs_dir_index, tmpdir)
+            cmd_exec_func(task_config.get("setup", None))
 
         if platform == "windows":
-            execute_batch_commands(
-                task_config.get("post_batch_commands", None),
-                True,
-                ":batch: Post Processing (Batch Commands)",
-            )
+            execute_batch_commands(task_config.get("batch_commands", None), print_cmd_groups)
         else:
-            execute_shell_commands(
-                task_config.get("post_shell_commands", None),
-                True,
-                ":bash: Post Processing (Shell Commands)",
-            )
+            execute_shell_commands(task_config.get("shell_commands", None), print_cmd_groups)
 
-    finally:
-        terminate_background_process(sc_process)
-        if tmpdir:
-            shutil.rmtree(tmpdir)
+    PrepareRepoInCwd(True, initial_setup=True)
+
+    bazel_version = print_bazel_version_info(bazel_binary, platform)
+
+    print_environment_variables_info()
+
+    execute_bazel_run(bazel_binary, platform, task_config.get("run_targets", None))
+
+    if needs_clean:
+        execute_bazel_clean(bazel_binary, platform)
+
+    # we need the commit here in order to calculate the correct targets.
+    git_commit = os.getenv("BUILDKITE_COMMIT")
+    if not git_commit:
+        raise BuildkiteInfraException("Unable to determine Git commit for this build")
+
+    test_flags, json_profile_out_test, capture_corrupted_outputs_dir_test = calculate_flags(
+        task_config, "test_flags", "test", tmpdir, test_env_vars
+    )
+
+    build_targets, test_targets, coverage_targets, index_targets = calculate_targets(
+        task_config,
+        bazel_binary,
+        build_only,
+        test_only,
+        os.getcwd(),
+        PrepareRepoInCwd,
+        git_commit,
+        test_flags,
+    )
+
+    if build_targets:
+        (
+            build_flags,
+            json_profile_out_build,
+            capture_corrupted_outputs_dir_build,
+        ) = calculate_flags(task_config, "build_flags", "build", tmpdir, test_env_vars)
+        try:
+            release_name = get_release_name_from_branch_name()
+            execute_bazel_build(
+                bazel_version,
+                bazel_binary,
+                platform,
+                build_flags
+                + (
+                    ["--stamp", "--embed_label=%s" % release_name]
+                    if save_but and release_name
+                    else []
+                ),
+                build_targets,
+                None,
+            )
+            if save_but:
+                upload_bazel_binary(platform)
+        finally:
+            if json_profile_out_build:
+                upload_json_profile(json_profile_out_build, tmpdir)
+            if capture_corrupted_outputs_dir_build:
+                upload_corrupted_outputs(capture_corrupted_outputs_dir_build, tmpdir)
+
+    if test_targets:
+        if not is_windows():
+            # On platforms that support sandboxing (Linux, MacOS) we have
+            # to allow access to Bazelisk's cache directory.
+            # However, the flag requires the directory to exist,
+            # so we create it here in order to not crash when a test
+            # does not invoke Bazelisk.
+            bazelisk_cache_dir = get_bazelisk_cache_directory()
+            os.makedirs(bazelisk_cache_dir, mode=0o755, exist_ok=True)
+            test_flags.append("--sandbox_writable_path={}".format(bazelisk_cache_dir))
+
+        # Set BUILDKITE_ANALYTICS_TOKEN so that bazelci-agent can upload test results to Test Analytics
+        if "ENCRYPTED_BUILDKITE_ANALYTICS_TOKEN" in os.environ:
+            if THIS_IS_TESTING:
+                kms_key = "buildkite-testing-api-token"
+                project = "bazel-untrusted"
+            elif THIS_IS_TRUSTED:
+                kms_key = "buildkite-trusted-api-token"
+                project = "bazel-public"
+            else:
+                kms_key = "buildkite-untrusted-api-token"
+                project = "bazel-untrusted"
+
+            try:
+                os.environ["BUILDKITE_ANALYTICS_TOKEN"] = decrypt_token(
+                    encrypted_token=os.environ["ENCRYPTED_BUILDKITE_ANALYTICS_TOKEN"],
+                    kms_key=kms_key,
+                    project=project,
+                )
+            except Exception as ex:
+                print_collapsed_group(
+                    ":rotating_light: Test analytics disabled due to an error :warning:"
+                )
+                eprint(ex)
+
+        test_bep_file = os.path.join(tmpdir, _TEST_BEP_FILE)
+        # Create an empty test_bep_file so that the bazelci-agent can start to follow the file right away. Otherwise,
+        # there is a race between when bazelci-agent starts to read the file and when Bazel creates the file.
+        open(test_bep_file, "w").close()
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(
+                upload_test_logs_from_bep, test_bep_file, tmpdir, monitor_flaky_tests
+            )
+            try:
+                execute_bazel_test(
+                    bazel_version,
+                    bazel_binary,
+                    platform,
+                    test_flags,
+                    test_targets,
+                    test_bep_file,
+                    monitor_flaky_tests,
+                )
+            finally:
+                if json_profile_out_test:
+                    upload_json_profile(json_profile_out_test, tmpdir)
+                if capture_corrupted_outputs_dir_test:
+                    upload_corrupted_outputs(capture_corrupted_outputs_dir_test, tmpdir)
+
+            _ = future.result()
+            # TODO: print results
+
+    if coverage_targets:
+        (
+            coverage_flags,
+            json_profile_out_coverage,
+            capture_corrupted_outputs_dir_coverage,
+        ) = calculate_flags(task_config, "coverage_flags", "coverage", tmpdir, test_env_vars)
+        try:
+            execute_bazel_coverage(
+                bazel_version,
+                bazel_binary,
+                platform,
+                coverage_flags,
+                coverage_targets,
+            )
+        finally:
+            if json_profile_out_coverage:
+                upload_json_profile(json_profile_out_coverage, tmpdir)
+            if capture_corrupted_outputs_dir_coverage:
+                upload_corrupted_outputs(capture_corrupted_outputs_dir_coverage, tmpdir)
+
+    if index_targets:
+        (
+            index_flags,
+            json_profile_out_index,
+            capture_corrupted_outputs_dir_index,
+        ) = calculate_flags(task_config, "index_flags", "index", tmpdir, test_env_vars)
+        index_upload_policy = task_config.get("index_upload_policy", "IfBuildSuccess")
+        index_upload_gcs = task_config.get("index_upload_gcs", False)
+
+        try:
+            should_upload_kzip = (
+                True if index_upload_policy == INDEX_UPLOAD_POLICY_ALWAYS else False
+            )
+            try:
+                execute_bazel_build_with_kythe(
+                    bazel_version,
+                    bazel_binary,
+                    platform,
+                    index_flags,
+                    index_targets,
+                    None,
+                )
+
+                if index_upload_policy == INDEX_UPLOAD_POLICY_IF_BUILD_SUCCESS:
+                    should_upload_kzip = True
+            except subprocess.CalledProcessError as e:
+                # If not running with Always policy, raise the build error.
+                if index_upload_policy != INDEX_UPLOAD_POLICY_ALWAYS:
+                    handle_bazel_failure(e, "build")
+
+            if should_upload_kzip and not is_pull_request():
+                try:
+                    merge_and_upload_kythe_kzip(platform, index_upload_gcs)
+                except subprocess.CalledProcessError:
+                    raise BuildkiteException("Failed to upload kythe kzip")
+        finally:
+            if json_profile_out_index:
+                upload_json_profile(json_profile_out_index, tmpdir)
+            if capture_corrupted_outputs_dir_index:
+                upload_corrupted_outputs(capture_corrupted_outputs_dir_index, tmpdir)
+
+    if platform == "windows":
+        execute_batch_commands(
+            task_config.get("post_batch_commands", None),
+            True,
+            ":batch: Post Processing (Batch Commands)",
+        )
+    else:
+        execute_shell_commands(
+            task_config.get("post_shell_commands", None),
+            True,
+            ":bash: Post Processing (Shell Commands)",
+        )
 
 
 def activate_xcode(task_config):
@@ -1743,7 +1619,7 @@ def download_bazelci_agent(dest_dir):
     repo = "bazelbuild/continuous-integration"
     if THIS_IS_TESTING and "BAZELCI_AGENT_REPO" in os.environ:
         repo = os.environ["BAZELCI_AGENT_REPO"]
-    version = "0.2.2"
+    version = "0.2.6"
     if THIS_IS_TESTING and "BAZELCI_AGENT_VERSION" in os.environ:
         version = os.environ["BAZELCI_AGENT_VERSION"]
     postfix = ""
@@ -1905,7 +1781,7 @@ def remote_caching_flags(platform, accept_cached=True):
     platform_cache_key = [
         BUILDKITE_ORG.encode("utf-8"),
         # Whenever the remote cache was known to have been poisoned increase the number below
-        "cache-poisoning-20230803".encode("utf-8"),
+        "cache-poisoning-20241105".encode("utf-8"),
         platform.encode("utf-8"),
     ]
 
@@ -2057,7 +1933,7 @@ def rbe_flags(original_flags, accept_cached):
         "--remote_timeout=3600",
         "--incompatible_strict_action_env",
         "--google_default_credentials",
-        "--toolchain_resolution_debug",
+        "--toolchain_resolution_debug=.*",
         "--remote_download_toplevel",
     ]
 
@@ -2111,6 +1987,18 @@ def rbe_flags(original_flags, accept_cached):
             flags += [platform_flag + "=" + value]
 
     return flags
+
+
+def run_bazel_version(bazel_binary, max_retry=5):
+    """Run `bazel --version` to make sure Bazel is fetched by Bazelisk."""
+    # Retry to address https://github.com/bazelbuild/continuous-integration/issues/2123
+    retry = 0
+    while retry < max_retry:
+        exit_code = execute_command([bazel_binary, "--version"], fail_if_nonzero=False)
+        if exit_code == 0:
+            return
+        retry += 1
+        time.sleep(1)
 
 
 def get_output_base(bazel_binary):
@@ -2275,7 +2163,6 @@ def calculate_targets(
     if not use_bazel_diff and not sharding_enabled:
         return build_targets, test_targets, coverage_targets, index_targets
 
-    # TODO(#1614): Fix target expansion
     expanded_test_targets = expand_test_target_patterns(bazel_binary, test_targets, test_flags)
 
     actual_test_targets = (
@@ -2387,7 +2274,14 @@ def get_test_tags(test_flags):
 
         return include, exclude
 
-    return [], ["manual"]
+    exclude = ["manual"]
+    # Workaround for --test_tag_filters in .bazelrc
+    if is_mac():
+        exclude.append("no_macos")
+    elif is_windows():
+        exclude.append("no_windows")
+
+    return [], exclude
 
 
 def removeprefix(s, prefix):
@@ -2579,6 +2473,7 @@ def run_bazel_diff(bazel_diff_path, old_workspace_dir, new_workspace_dir, bazel_
                     "-jar",
                     bazel_diff_path,
                     "generate-hashes",
+                    "--excludeExternalTargets",
                     "-w",
                     repo_dir,
                     "-b",
@@ -2785,21 +2680,9 @@ def execute_command(
     ).returncode
 
 
-def execute_command_background(args):
-    eprint(" ".join(args))
-    return subprocess.Popen(args, env=os.environ)
-
-
-def terminate_background_process(process):
-    if process:
-        process.terminate()
-        try:
-            process.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            process.kill()
-
-
-def create_step(label, commands, platform, shards=1, soft_fail=None, concurrency=None, concurrency_group=None):
+def create_step(
+    label, commands, platform, shards=1, soft_fail=None, concurrency=None, concurrency_group=None
+):
     if "docker-image" in PLATFORMS[platform]:
         step = create_docker_step(
             label,
@@ -2814,6 +2697,12 @@ def create_step(label, commands, platform, shards=1, soft_fail=None, concurrency
             "command": commands,
             "agents": {"queue": PLATFORMS[platform]["queue"]},
         }
+
+    project_slug = "{}/{}".format(
+        os.getenv("BUILDKITE_ORGANIZATION_SLUG"), os.getenv("BUILDKITE_PIPELINE_SLUG")
+    )
+    if project_slug in _PRIORITY_PIPELINES:
+        step["priority"] = 1
 
     if shards > 1:
         # %N means shard counting starts at 1, not 0
@@ -4481,7 +4370,11 @@ def main(argv=None):
     runner.add_argument("--task", action="store", type=str, default="")
     runner.add_argument("--file_config", type=str)
     runner.add_argument("--http_config", type=str)
-    runner.add_argument("--overwrite_bazel_version", type=str, help="Overwrite the bazel version in the config file.")
+    runner.add_argument(
+        "--overwrite_bazel_version",
+        type=str,
+        help="Overwrite the bazel version in the config file.",
+    )
     runner.add_argument("--git_repository", type=str)
     runner.add_argument(
         "--git_commit", type=str, help="Reset the git repository to this commit after cloning it"
@@ -4586,7 +4479,9 @@ def main(argv=None):
             old_bazel = task_config.get("old_bazel")
             if old_bazel:
                 new_bazel = task_config.get("bazel")
-                print_collapsed_group(f":bazel: Bazel version overridden from {old_bazel} to {new_bazel}")
+                print_collapsed_group(
+                    f":bazel: Bazel version overridden from {old_bazel} to {new_bazel}"
+                )
 
             execute_commands(
                 task_config=task_config,

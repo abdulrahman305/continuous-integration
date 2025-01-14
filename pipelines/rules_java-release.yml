@@ -28,7 +28,7 @@ steps:
     command: | 
       echo "+++ Checking out Git branch"
       git fetch origin ${BUILDKITE_BRANCH}
-      git checkout ${BUILDKITE_BRANCH}
+      git checkout ${BUILDKITE_COMMIT}
 
       echo "+++ Getting the latest rules_java version"
       contents=$(cat MODULE.bazel)
@@ -40,7 +40,7 @@ steps:
       bazel build //distro:rules_java-\${version}
 
       echo "+++ Preparing release notes"
-      bazel build //distro:relnotes
+      bazel build --genrule_strategy=local //distro:relnotes
 
       echo "+++ Downloading github-release"
       curl -L https://mirror.bazel.build/github.com/c4milo/github-release/releases/download/v1.1.0/github-release_v1.1.0_linux_amd64.tar.gz | sudo tar xz -C /usr/local/bin
@@ -53,4 +53,4 @@ steps:
       echo "+++ Creating a release on GitHub"
       cd bazel-bin/distro
       relnotes=$(cat relnotes.txt)
-      GITHUB_TOKEN=\${github_token} github-release "bazelbuild/rules_java" \${version} "\${BUILDKITE_BRANCH}" "\${relnotes}" rules_java-\${version}.tar.gz      
+      GITHUB_TOKEN=\${github_token} github-release "bazelbuild/rules_java" \${version} "\${BUILDKITE_COMMIT}" "\${relnotes}" rules_java-\${version}.tar.gz      

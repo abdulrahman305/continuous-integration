@@ -11,6 +11,21 @@ Add-Type -AssemblyName "System.IO.Compression.FileSystem"
 ## Use TLS1.2 for HTTPS (fixes an issue where later steps can't connect to github.com)
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
+## If choco is already installed, this is the second time the VM starts up, run GCESysprep and then shutdown
+if (Get-Command choco -ErrorAction SilentlyContinue) {
+    $port = New-Object System.IO.Ports.SerialPort COM1,9600,None,8,one
+    $port.Open()
+    $port.WriteLine("[setup-windows.ps1]: choco is already installed, this is the second time the VM starts up, running GCESysprep and then shutdown...")
+    $port.Close()
+    GCESysprep
+    exit 0
+}
+
+$port = New-Object System.IO.Ports.SerialPort COM1,9600,None,8,one
+$port.Open()
+$port.WriteLine("[setup-windows.ps1]: Starting to setup windows... This could take up to one hour, check C:/setup-stdout.log on the VM for progress.")
+$port.Close()
+
 ## Create C:\temp
 Write-Host "Creating temporary folder C:\temp..."
 if (-Not (Test-Path "c:\temp")) {
@@ -159,33 +174,23 @@ foreach ($directory in $directories) {
 [Environment]::SetEnvironmentVariable("BAZEL_VC", "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC", "Machine")
 $env:BAZEL_VC = [Environment]::GetEnvironmentVariable("BAZEL_VC", "Machine")
 
-## Install Windows 10 SDK
-## https://github.com/bazelbuild/continuous-integration/issues/768
-& choco install windows-sdk-10-version-2004-all
-
-## Install Python2
-Write-Host "Installing Python 2..."
-& choco install python2 --params "/InstallDir:C:\python2"
-$env:PATH = [Environment]::GetEnvironmentVariable("PATH", "Machine")
-
 ## Install Python3
 Write-Host "Installing Python 3..."
-& choco install python3 --params "/InstallDir:C:\python3" --version=3.9.7
+& choco install python312 --params "/InstallDir:C:\python3"
 $env:PATH = [Environment]::GetEnvironmentVariable("PATH", "Machine")
 New-Item -ItemType SymbolicLink -Path "C:\python3\python3.exe" -Target "C:\python3\python.exe"
 
 ## Install a couple of Python modules required by TensorFlow.
 Write-Host "Updating Python package management tools..."
-& "C:\Python2\python.exe" -m pip install --upgrade pip setuptools wheel
 & "C:\Python3\python.exe" -m pip install --upgrade pip setuptools wheel
 
 Write-Host "Installing Python packages..."
 & "C:\Python3\Scripts\pip.exe" install --upgrade `
     autograd `
-    numpy~=1.21.2 `
+    numpy `
     portpicker `
     protobuf `
-    pyreadline `
+    pyreadline3 `
     six `
     requests `
     pyyaml `
@@ -347,6 +352,11 @@ $pagefile.InitialSize = 4 * 1024;
 $pagefile.MaximumSize = 64 * 1024;
 $pagefile.Put();
 
-Write-Host "All done, adding GCESysprep to RunOnce and rebooting..."
-Set-ItemProperty "HKLM:\Software\Microsoft\Windows\CurrentVersion\RunOnce" -Name "GCESysprep" -Value "c:\Program Files\Google\Compute Engine\sysprep\gcesysprep.bat"
+Write-Host "All done, rebooting..."
+
+$port = New-Object System.IO.Ports.SerialPort COM1,9600,None,8,one
+$port.Open()
+$port.WriteLine("[setup-windows.ps1]: Setup windows done, rebooting...")
+$port.Close()
+
 Restart-Computer

@@ -23,6 +23,7 @@
 import os
 import sys
 import subprocess
+import time
 
 import bazelci
 import bcr_presubmit
@@ -31,7 +32,7 @@ CI_MACHINE_NUM = {
     "bazel": {
         "default": 100,
         "windows": 30,
-        "macos_arm64": 45,
+        "macos_arm64": 95,
         "macos": 110,
         "arm64": 1,
     },
@@ -47,6 +48,14 @@ CI_MACHINE_NUM = {
 # Default to use only 30% of CI resources for each type of machines.
 CI_RESOURCE_PERCENTAGE = int(os.environ.get('CI_RESOURCE_PERCENTAGE', 30))
 
+SCRIPT_URL = "https://raw.githubusercontent.com/bazelbuild/continuous-integration/{}/buildkite/bazel-central-registry/generate_report.py?{}".format(
+    bazelci.GITHUB_BRANCH, int(time.time())
+)
+
+
+def fetch_generate_report_py_command():
+    return "curl -s {0} -o generate_report.py".format(SCRIPT_URL)
+
 
 def select_modules_from_env_vars():
     """
@@ -55,6 +64,18 @@ def select_modules_from_env_vars():
     """
     MODULE_SELECTIONS = os.environ.get('MODULE_SELECTIONS', '')
     SMOKE_TEST_PERCENTAGE = os.environ.get('SMOKE_TEST_PERCENTAGE', None)
+
+    top_n = os.environ.get('SELECT_TOP_BCR_MODULES')
+    if top_n:
+        # Remove USE_BAZEL_VERSION to make this step more stable.
+        env = os.environ.copy()
+        env.pop("USE_BAZEL_VERSION", None)
+        output = subprocess.check_output(
+            ["bazel", "run", "//tools:module_analyzer", "--", "--name-only", f"--top_n={top_n}"],
+            env = env,
+        )
+        top_modules = output.decode("utf-8").split()
+        MODULE_SELECTIONS = ','.join([f"{module}@latest" for module in top_modules])
 
     if not MODULE_SELECTIONS:
         return []
@@ -75,18 +96,17 @@ def select_modules_from_env_vars():
 
 def get_target_modules():
     """
-    If the `MODULE_SELECTIONS` and `SMOKE_TEST_PERCENTAGE(S)` are specified, calculate the target modules from those env vars.
-    Otherwise, calculate target modules based on changed files from the main branch.
+    Returns a list of selected module versions.
     """
-    if "MODULE_SELECTIONS" not in os.environ:
-        raise ValueError("Please set MODULE_SELECTIONS env var to select modules for testing!")
+    if "MODULE_SELECTIONS" not in os.environ and "SELECT_TOP_BCR_MODULES" not in os.environ:
+        raise ValueError("Please set MODULE_SELECTIONS or SELECT_TOP_BCR_MODULES env var to select modules for testing!")
 
     modules = select_modules_from_env_vars()
     if modules:
         bazelci.print_expanded_group("The following modules are selected:\n\n%s" % "\n".join([f"{name}@{version}" for name, version in modules]))
         return sorted(list(set(modules)))
     else:
-        raise ValueError("MODULE_SELECTIONS env var didn't select any modules!")
+        raise ValueError("No modules were selected, please set MODULE_SELECTIONS or SELECT_TOP_BCR_MODULES correctly!")
 
 
 def create_step_for_report_flags_results():
@@ -102,6 +122,26 @@ def create_step_for_report_flags_results():
             commands=[
                 bazelci.fetch_bazelcipy_command(),
                 bazelci.fetch_aggregate_incompatible_flags_test_result_command(),
+                " ".join(parts),
+            ],
+            platform=bazelci.DEFAULT_PLATFORM,
+        ),
+    ]
+
+def create_step_for_generate_report():
+    parts = [
+        bazelci.PLATFORMS[bazelci.DEFAULT_PLATFORM]["python"],
+        "generate_report.py",
+        "--build_number=%s" % os.getenv("BUILDKITE_BUILD_NUMBER"),
+    ]
+    return [
+        {"wait": "~", "continue_on_failure": "true"},
+        bazelci.create_step(
+            label="Generate report in markdown",
+            commands=[
+                bazelci.fetch_bazelcipy_command(),
+                bcr_presubmit.fetch_bcr_presubmit_py_command(),
+                fetch_generate_report_py_command(),
                 " ".join(parts),
             ],
             platform=bazelci.DEFAULT_PLATFORM,
@@ -127,6 +167,8 @@ def main():
             pipeline_steps.insert(0, {"block": "Please review generated jobs before proceeding", "blocked_state": "running"})
         if bazelci.use_bazelisk_migrate():
             pipeline_steps += create_step_for_report_flags_results()
+        else:
+            pipeline_steps += create_step_for_generate_report()
 
     bcr_presubmit.upload_jobs_to_pipeline(pipeline_steps)
 
