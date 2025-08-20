@@ -1,4 +1,5 @@
 FROM ubuntu:16.04 AS ubuntu1604-bazel-java8
+FROM ubuntu:xenial-20201014 as ubuntu1604-bazel-java8
 ARG BUILDARCH
 
 ENV DEBIAN_FRONTEND="noninteractive"
